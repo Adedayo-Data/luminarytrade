@@ -1,102 +1,201 @@
-# ChenAIKit
+# LuminaryTrade
 
-> ⚡ A TypeScript toolkit for building AI-powered blockchain applications.
+> A TypeScript monorepo that connects blockchain integrations (Stellar + Soroban) with AI services for trading, credit scoring, fraud detection, and risk automation.
 
-AI Kit helps developers quickly add machine-learning features like credit scoring, fraud detection, and smart decisioning to their apps.  
-It wraps common blockchain operations (starting with Stellar support) and connects them to AI models so you can focus on building products instead of plumbing.
-
----
-
-## ✨ Features
-
-- 🧠 *AI integrations* – ready-to-use wrapper for credit scoring and fraud detection
-- 🔗 *Blockchain connectors* – simple APIs for Stellar Horizon and Soroban contracts
-- ⚙ *TypeScript SDK* – strongly-typed, easy to extend, works in Node and browser
-- 🛠 *Examples & templates* – jump-start your own project with working examples
-- 🎯 *CLI tools* – command-line interface for common operations
-- 📊 *Smart contracts* – pre-built Soroban contracts for common use cases
+LuminaryTrade provides composable, production-minded building blocks — SDKs, backend services, frontend apps, smart contracts, examples, and DevOps scripts — so teams can iterate quickly and ship AI-enabled blockchain features.
 
 ---
 
-## 🏗️ Project Structure
+## Key features
 
+- 🔗 Blockchain connectors — Stellar Horizon client and Soroban contract helpers  
+- 🧠 AI integrations — credit scoring, fraud detection, and risk signals with pluggable providers  
+- ⚙️ TypeScript-first — strongly-typed SDKs that run in Node and the browser  
+- 🛠 Example apps and CLI utilities to accelerate development  
+- 📦 Monorepo layout — backend, frontend, contracts, docs, and shared libs in one place
+
+---
+
+## Project structure
+
+A concise tree of the repo so contributors and maintainers can find what they need.
+
+```text
+luminarytrade/
+├── backend/                  # Backend services and APIs
+│   ├── src/                  # API source code (controllers, services, models)
+│   ├── tests/                # Unit & integration tests
+│   └── README.md
+├── frontend/                 # Frontend applications and UI components
+│   ├── apps/                 # Multiple apps (dashboard, wallet, etc.)
+│   ├── components/           # Shared React components
+│   └── README.md
+├── contracts/                # Soroban smart contracts and build artifacts
+│   ├── credit-score/         # Credit scoring contract(s)
+│   ├── fraud-detect/         # Fraud detection contract(s)
+│   └── common-utils/         # Shared contract utilities & tests
+├── examples/                 # Example integrations & reference apps
+│   ├── credit-scoring-app/
+│   ├── wallet-chatbot/
+│   └── fraud-detection-service/
+├── packages/                 # Shared TypeScript packages / SDKs
+│   ├── core/                 # Core SDK (connectors, types, utilities)
+│   └── cli/                  # CLI tools and scripts
+├── docs/                     # Documentation (guides, API reference)
+├── scripts/                  # Build, deploy, and automation scripts
+├── tests/                    # End-to-end and system tests
+├── .github/                  # CI workflows, issue templates, PR templates
+└── README.md                 # This file
 ```
-chenaikit/
-├── packages/
-│   ├── core/                 # Core TypeScript SDK
-│   └── cli/                  # CLI tool
-├── contracts/                # Soroban smart contracts
-│   ├── credit-score/         # Credit scoring contract
-│   ├── fraud-detect/         # Fraud detection contract
-│   └── common-utils/         # Shared utilities
-├── examples/                 # Sample applications
-│   ├── credit-scoring-app/   # Credit scoring example
-│   ├── wallet-chatbot/       # Wallet chatbot example
-│   └── fraud-detection-service/ # Fraud detection example
-├── docs/                     # Documentation
-└── tests/                    # Test suites
-```
 
 ---
 
-## 🚀 Quick Start
+## Quick start
 
-### Install the core package:
+Prerequisites
+- Node 18+ (LTS recommended)
+- pnpm (recommended) or npm/yarn
+- Docker (recommended for local DB and contract testnet)
+- AI provider API key (when using hosted AI features)
+
+1. Clone the repository
 
 ```bash
-pnpm install @chenaikit/core
+git clone https://github.com/StellAIverse/luminarytrade.git
+cd luminarytrade
 ```
 
-### Install the CLI tool:
+2. Install top-level dependencies
 
 ```bash
-pnpm install -g @chenaikit/cli
+pnpm install
 ```
 
-### Basic usage:
+3. Backend — development
 
-```typescript
-import { StellarConnector, AIService } from '@chenaikit/core';
+```bash
+cd backend
+pnpm install
+cp .env.example .env          # set DATABASE_URL, REDIS_URL, AI_API_KEY, etc.
+pnpm dev                      # starts dev server (hot reload)
+```
 
-// Initialize Stellar connection
-const stellar = new StellarConnector({
-  network: 'testnet'
-});
+Default API:
+- Health: GET /api/health
+- Example: GET /api/accounts/:id/credit-score
 
-// Initialize AI service
-const ai = new AIService({
-  apiKey: process.env.AI_API_KEY
-});
+4. Frontend — development
 
-// Get account data and calculate credit score
-const account = await stellar.getAccount('G...');
-const score = await ai.calculateCreditScore(account);
+```bash
+cd frontend
+pnpm install
+pnpm start
+```
+
+Open the frontend app at the configured port (commonly http://localhost:3000 or 3001).
+
+5. Tests
+
+- Backend tests
+
+```bash
+cd backend
+pnpm test
+```
+
+- Frontend tests
+
+```bash
+cd frontend
+pnpm test
+```
+
+6. Smart contracts
+
+Contracts are under `contracts/`. Use the included build and deploy scripts or the Soroban toolchain to compile and deploy to testnet or a local VM. Example:
+
+```bash
+cd contracts/credit-score
+pnpm install
+pnpm build
+# deploy using scripts or soroban CLI
 ```
 
 ---
 
-## 📚 Documentation
+## Configuration & environment variables
 
-- [Getting Started](docs/getting-started.md)
-- [API Reference](docs/api-reference.md)
-- [Examples](examples/)
-- [Smart Contracts](contracts/)
+Common env variables (example):
+
+```env
+# backend
+PORT=3000
+NODE_ENV=development
+DATABASE_URL=postgresql://user:pass@localhost:5432/luminary
+REDIS_URL=redis://localhost:6379
+AI_API_KEY=your_ai_api_key
+
+# frontend
+REACT_APP_API_URL=http://localhost:3000/api
+REACT_APP_STELLAR_NETWORK=testnet
+```
+
+Each package/app has its own README with any additional required variables.
 
 ---
 
-## 🤝 Contributing
+## Example: using the core SDK
 
-We welcome contributions! Check out our [issue templates](.github/ISSUE_TEMPLATE/) for beginner-friendly tasks:
+A minimal usage example showing how to connect to Stellar and request a credit score:
 
-- **Frontend**: React components, UI/UX, data visualization
-- **Backend**: APIs, databases, authentication, monitoring
-- **AI**: Machine learning models, fraud detection, NLP
-- **Blockchain**: Stellar integration, Soroban contracts, DEX features
+```ts
+import { StellarConnector, AIService } from '@luminarytrade/core';
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+const stellar = new StellarConnector({ network: 'testnet' });
+
+const ai = new AIService({ apiKey: process.env.AI_API_KEY });
+
+async function main() {
+  const account = await stellar.getAccount('G...'); // public key
+  const score = await ai.calculateCreditScore(account);
+  console.log('Credit score:', score);
+}
+
+main().catch(console.error);
+```
 
 ---
 
-## 📄 License
+## Architecture notes
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- Backend: REST API + background workers; stores account history and risk signals; exposes endpoints to request scoring and fraud checks.
+- Frontend: React + TypeScript apps that consume backend APIs and show analytics/dashboards.
+- Contracts: Soroban contracts implement on-chain scoring primitives and verifiable artifacts.
+- Packages: Shared types and utilities live under `packages/` to keep DTOs and clients consistent across apps.
+
+---
+
+## Contributing
+
+We welcome contributions — bug reports, features, documentation improvements, examples, and tests.
+
+1. Fork the repo and create a feature branch.
+2. Open an issue describing your change or pick a task from Issues.
+3. Add tests and documentation for new behavior.
+4. Submit a pull request with a clear description and checklist.
+
+See `CONTRIBUTING.md` in the repo for coding standards, branch strategy, and review guidance.
+
+---
+
+## Maintainers & community
+
+- Maintained by the StellAIverse team. For urgent issues/coordination, open an issue or tag maintainers in PRs.
+
+---
+
+## License
+
+This project is licensed under the MIT License. See the LICENSE file for details.
+
+---
