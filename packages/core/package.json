@@ -1,0 +1,45 @@
+{
+  "name": "@chenaikit/core",
+  "version": "0.1.0",
+  "description": "Core TypeScript SDK for ChenAIKit - AI-powered blockchain applications",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "lint": "eslint src/**/*.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "stellar",
+    "soroban",
+    "ai",
+    "blockchain",
+    "typescript",
+    "sdk"
+  ],
+  "author": "ChenAIKit Team",
+  "license": "MIT",
+  "dependencies": {
+    "@stellar/stellar-sdk": "^11.3.0",
+    "axios": "^1.12.2"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.0.0",
+    "@types/node": "^20.0.0",
+    "@types/urijs": "^1.19.25",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "jest": "^29.0.0",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
