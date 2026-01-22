@@ -1,23 +1,21 @@
 #![no_std]
 
 use soroban_sdk::{
-    contractimpl, panic_with_error, symbol, token, Address, BytesN, Env, IntoVal, Map, Storage,
-    TokenIdentifier, Vec,
+    contract, contractimpl, panic_with_error, symbol, Address, Env, Map, Storage, Vec, IntoVal,
+    log, events,
 };
 
-/// Errors for the SkillTree contract.
+/// Errors for the CommonUtils contract.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
-    /// Quest already completed by user.
-    QuestAlreadyCompleted = 1,
-    /// Quest does not exist.
-    QuestNotFound = 2,
-    /// Only contract admin can perform this action.
-    Unauthorized = 3,
-    /// Badge minting failed.
-    BadgeMintFailed = 4,
-    /// Character already minted for user.
-    CharacterAlreadyMinted = 5,
+    /// Action type not valid.
+    InvalidActionType = 1,
+    /// Execution ID already exists.
+    ExecutionIdExists = 2,
+    /// Rate limit exceeded for agent.
+    RateLimitExceeded = 3,
+    /// Only admin can perform this action.
+    Unauthorized = 4,
 }
 
 impl soroban_sdk::contracterror::ContractError for Error {
@@ -26,201 +24,215 @@ impl soroban_sdk::contracterror::ContractError for Error {
     }
 }
 
-/// Quest info struct for quest metadata (optional, stored in contract)
+/// Action types supported by the contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionType {
+    CreditScore = 1,
+    FraudDetect = 2,
+    Trade = 3,
+}
+
+impl ActionType {
+    pub fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            1 => Some(ActionType::CreditScore),
+            2 => Some(ActionType::FraudDetect),
+            3 => Some(ActionType::Trade),
+            _ => None,
+        }
+    }
+}
+
+/// Execution record.
 #[derive(Clone)]
-pub struct Quest {
-    pub id: u32,
-    pub name: &'static str,
-    pub badge_name: &'static str,
+pub struct Execution {
+    pub id: u64,
+    pub agent: Address,
+    pub action_type: ActionType,
+    pub data: Vec<u8>,
+    pub timestamp: u64,
 }
 
 /// Main contract struct
-pub struct SkillTreeContract;
-
-const CHARACTER_NFT_NAME: &str = "SkillTree Character";
-const CHARACTER_NFT_SYMBOL: &str = "STC";
-
-const BADGE_NFT_NAME: &str = "SkillTree Badge";
-const BADGE_NFT_SYMBOL: &str = "STB";
+#[contract]
+pub struct CommonUtilsContract;
 
 const KEY_ADMIN: &str = "admin";
-const KEY_CHARACTER_MINTED: &str = "character_minted";
-const PREFIX_QUEST_COMPLETED: &str = "quest_completed";
-
-// We will use Soroban token contract for NFTs.
-// We need the character soulbound NFT (non-transferable) - we simulate this by preventing transfers.
-// Badges are transferable NFTs minted upon quest completion.
+const KEY_EXECUTION_COUNTER: &str = "execution_counter";
+const PREFIX_EXECUTION: &str = "execution";
+const PREFIX_AGENT_RATE_LIMIT: &str = "rate_limit";
+const RATE_LIMIT_WINDOW: u64 = 3600; // 1 hour in seconds
+const RATE_LIMIT_MAX: u32 = 10; // max actions per window
 
 #[contractimpl]
-impl SkillTreeContract {
+impl CommonUtilsContract {
     /// Initialize contract with admin set to caller.
     pub fn initialize(env: Env) {
         let admin = env.invoker();
-        env.storage().set(&symbol!(KEY_ADMIN), &admin);
+        env.storage().persistent().set(&symbol!(KEY_ADMIN), &admin);
+        env.storage().persistent().set(&symbol!(KEY_EXECUTION_COUNTER), &0u64);
     }
 
-    /// Mint a soulbound character NFT for the user.
-    /// Only one character NFT per user, soulbound means non-transferable.
-    pub fn mint_character(env: Env, user: Address) {
-        // Only user themselves can mint their character or admin
-        let invoker = env.invoker();
-        if invoker != user && invoker != Self::admin(&env) {
-            panic_with_error!(&env, Error::Unauthorized);
+    /// Submit an agent action.
+    /// Validates action type, enforces rate limits, records execution, emits event.
+    pub fn submit_action(env: Env, agent: Address, action_type: u32, data: Vec<u8>) -> u64 {
+        // Validate action type
+        let action = ActionType::from_u32(action_type).unwrap_or_else(|| {
+            panic_with_error!(&env, Error::InvalidActionType);
+        });
+
+        // Check rate limit
+        Self::check_rate_limit(&env, &agent);
+
+        // Generate unique execution ID
+        let counter = env.storage().persistent().get::<_, u64>(&symbol!(KEY_EXECUTION_COUNTER)).unwrap_or(0);
+        let execution_id = counter + 1;
+
+        // Check uniqueness (though counter ensures it)
+        let execution_key = (symbol!(PREFIX_EXECUTION), execution_id);
+        if env.storage().persistent().has(&execution_key) {
+            panic_with_error!(&env, Error::ExecutionIdExists);
         }
 
-        // Check if character NFT already minted for user
-        let storage = env.storage();
-        let char_key = (symbol!(KEY_CHARACTER_MINTED), user.clone());
-        if storage.has(&char_key) {
-            panic_with_error!(&env, Error::CharacterAlreadyMinted);
+        // Create execution record
+        let timestamp = env.ledger().timestamp();
+        let execution = Execution {
+            id: execution_id,
+            agent: agent.clone(),
+            action_type: action,
+            data,
+            timestamp,
+        };
+
+        // Store execution
+        env.storage().persistent().set(&execution_key, &execution);
+        env.storage().persistent().set(&symbol!(KEY_EXECUTION_COUNTER), &execution_id);
+
+        // Update rate limit
+        Self::update_rate_limit(&env, &agent, timestamp);
+
+        // Emit event
+        env.events().publish((symbol!("action_submitted"),), (execution_id, agent, action_type, timestamp));
+
+        execution_id
+    }
+
+    /// Get execution by ID.
+    pub fn get_execution(env: Env, execution_id: u64) -> Option<Execution> {
+        let key = (symbol!(PREFIX_EXECUTION), execution_id);
+        env.storage().persistent().get(&key)
+    }
+
+    /// Get admin address.
+    pub fn admin(env: Env) -> Address {
+        env.storage().persistent().get_unchecked(&symbol!(KEY_ADMIN))
+    }
+
+    /// Check if agent has exceeded rate limit.
+    fn check_rate_limit(env: &Env, agent: &Address) {
+        let now = env.ledger().timestamp();
+        let window_start = now.saturating_sub(RATE_LIMIT_WINDOW);
+        let key = (symbol!(PREFIX_AGENT_RATE_LIMIT), agent.clone());
+        
+        let actions: Vec<u64> = env.storage().temporary().get(&key).unwrap_or(Vec::new(env));
+        let recent_actions: Vec<u64> = actions.iter().filter(|&t| *t >= window_start).collect();
+        
+        if recent_actions.len() >= RATE_LIMIT_MAX as usize {
+            panic_with_error!(env, Error::RateLimitExceeded);
         }
-
-        // Use token interface to mint soulbound NFT - character
-        // Create a token id for character NFT collection (unique)
-        // For simplicity, use contract id + "character" as TokenIdentifier
-        let token_id = Self::character_token_id(&env);
-
-        // Create metadata attribute map for character NFT
-        let mut metadatas = Map::<symbol::Symbol, Vec<u8>>::new(&env);
-        metadatas.set(symbol!("name"), CHARACTER_NFT_NAME.into_val(&env));
-        metadatas.set(symbol!("symbol"), CHARACTER_NFT_SYMBOL.into_val(&env));
-
-        // Instantiate token object for mint operation
-        let token_client = token::Client::new(&env, &token_id);
-
-        // Mint token id #user address represented as uint256 or bytes as token ID
-        // Here we mint a single NFT with token_id and token ID is 1 for user
-        // But NFTs in Soroban tokens are identified by (TokenIdentifier, u128)
-        // We'll use user's address as u128 hash for token ID for uniqueness
-
-        let user_id_bytes = user.to_bytes(&env);
-        let user_id_num = Self::address_to_u128(&user_id_bytes);
-
-        token_client.mint(&user, &user_id_num, &1);
-
-        // Store that character minted for user
-        storage.set(&char_key, &true);
     }
 
-    /// Mint a badge NFT for a user when they complete a quest.
-    /// Each badge is an NFT with unique ID.
-    /// QuestId is the identifier for the quest.
-    pub fn mint_badge(env: Env, user: Address, quest_id: u32) {
-        let invoker = env.invoker();
-        // Only user themselves or admin can mint badges for user
-        if invoker != user && invoker != Self::admin(&env) {
-            panic_with_error!(&env, Error::Unauthorized);
-        }
-
-        // Check quest completion state to prevent double minting
-        let storage = env.storage();
-        let quest_completed_key = (symbol!(PREFIX_QUEST_COMPLETED), user.clone(), quest_id);
-        if storage.has(&quest_completed_key) {
-            panic_with_error!(&env, Error::QuestAlreadyCompleted);
-        }
-
-        // Verify quest exists - in a real app you might store quests; here we accept 1 through 5
-        if quest_id == 0 || quest_id > 5 {
-            panic_with_error!(&env, Error::QuestNotFound);
-        }
-
-        // Mint badge NFT to user
-        let token_id = Self::badge_token_id(&env);
-        let token_client = token::Client::new(&env, &token_id);
-
-        // Token ID: combine quest_id + user_address hash to generate unique token ID for each badge
-        // For simplicity, token ID = quest_id * 1_000_000_000_000 + user numeric ID (u128)
-        let user_id_bytes = user.to_bytes(&env);
-        let user_id_num = Self::address_to_u128(&user_id_bytes);
-        let token_number = (quest_id as u128) * 1_000_000_000_000u128 + user_id_num;
-
-        token_client.mint(&user, &token_number, &1);
-
-        // Store quest completion
-        storage.set(&quest_completed_key, &true);
-
-        // Update user's badge count (optional)
-        // Not implemented here; can be derived offchain by counting NFTs
-    }
-
-    /// Helper to get admin address
-    pub fn admin(env: &Env) -> Address {
-        env.storage()
-            .get_unchecked::<_, Address>(&symbol!(KEY_ADMIN))
-            .unwrap()
-    }
-
-    /// Helper to get character token identifier for soulbound character NFTs.
-    /// We simulate an NFT collection by contract id + suffix "character"
-    pub fn character_token_id(env: &Env) -> TokenIdentifier {
-        let mut contractid = env.get_current_contract_id().into_val(env);
-        // Append "character" bytes
-        contractid.extend_from_slice(b"character");
-        TokenIdentifier::from_bytes(&env, &contractid)
-    }
-
-    /// Helper to get badge token identifier for badge NFTs.
-    pub fn badge_token_id(env: &Env) -> TokenIdentifier {
-        let mut contractid = env.get_current_contract_id().into_val(env);
-        // Append "badge" bytes
-        contractid.extend_from_slice(b"badge");
-        TokenIdentifier::from_bytes(&env, &contractid)
-    }
-
-    /// Convert address bytes to u128 for token IDs
-    pub fn address_to_u128(bytes: &BytesN<32>) -> u128 {
-        // Take first 16 bytes as u128 in big endian
-        let slice = &bytes.as_ref()[..16];
-        let mut arr = [0u8; 16];
-        arr.copy_from_slice(slice);
-        u128::from_be_bytes(arr)
+    /// Update rate limit for agent.
+    fn update_rate_limit(env: &Env, agent: &Address, timestamp: u64) {
+        let key = (symbol!(PREFIX_AGENT_RATE_LIMIT), agent.clone());
+        let mut actions: Vec<u64> = env.storage().temporary().get(&key).unwrap_or(Vec::new(env));
+        actions.push_back(timestamp);
+        env.storage().temporary().set(&key, &actions);
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Env as TestEnv, Address, BytesN};
+    use soroban_sdk::{testutils::Env as TestEnv, Address, Vec};
 
     #[test]
-    fn test_initialize_and_admin() {
+    fn test_initialize() {
         let env = TestEnv::default();
-        let contract = SkillTreeContract {};
-        // initialize
-        contract.initialize(env.clone());
-        let admin = SkillTreeContract::admin(&env);
+        let contract_id = env.register_contract(None, CommonUtilsContract);
+        let client = CommonUtilsContractClient::new(&env, &contract_id);
+        client.initialize();
+        let admin = client.admin();
         assert_eq!(admin, env.invoker());
     }
 
     #[test]
-    fn test_mint_character_works() {
+    fn test_submit_action_valid() {
         let env = TestEnv::default();
-        let contract = SkillTreeContract {};
-        contract.initialize(env.clone());
-        let user = Address::random(&env);
-        env.set_invoker(user.clone());
-        contract.mint_character(env.clone(), user.clone());
-        // minting again should fail
-        let result =
-            std::panic::catch_unwind(|| contract.mint_character(env.clone(), user.clone()));
+        let contract_id = env.register_contract(None, CommonUtilsContract);
+        let client = CommonUtilsContractClient::new(&env, &contract_id);
+        client.initialize();
+        
+        let agent = Address::random(&env);
+        let data = Vec::new(&env);
+        let execution_id = client.submit_action(&agent, &1u32, &data);
+        assert_eq!(execution_id, 1);
+        
+        let execution = client.get_execution(&execution_id).unwrap();
+        assert_eq!(execution.id, 1);
+        assert_eq!(execution.agent, agent);
+        assert_eq!(execution.action_type as u32, 1);
+    }
+
+    #[test]
+    fn test_submit_action_invalid_type() {
+        let env = TestEnv::default();
+        let contract_id = env.register_contract(None, CommonUtilsContract);
+        let client = CommonUtilsContractClient::new(&env, &contract_id);
+        client.initialize();
+        
+        let agent = Address::random(&env);
+        let data = Vec::new(&env);
+        let result = std::panic::catch_unwind(|| {
+            client.submit_action(&agent, &99u32, &data);
+        });
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_mint_badge_works() {
+    fn test_execution_id_unique() {
         let env = TestEnv::default();
-        let contract = SkillTreeContract {};
-        contract.initialize(env.clone());
-        let user = Address::random(&env);
-        env.set_invoker(user.clone());
+        let contract_id = env.register_contract(None, CommonUtilsContract);
+        let client = CommonUtilsContractClient::new(&env, &contract_id);
+        client.initialize();
+        
+        let agent = Address::random(&env);
+        let data = Vec::new(&env);
+        let id1 = client.submit_action(&agent, &1u32, &data);
+        let id2 = client.submit_action(&agent, &2u32, &data);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+    }
 
-        contract.mint_badge(env.clone(), user.clone(), 1);
-        // minting same badge again fails
-        let result = std::panic::catch_unwind(|| contract.mint_badge(env.clone(), user.clone(), 1));
+    #[test]
+    fn test_rate_limit() {
+        let env = TestEnv::default();
+        let contract_id = env.register_contract(None, CommonUtilsContract);
+        let client = CommonUtilsContractClient::new(&env, &contract_id);
+        client.initialize();
+        
+        let agent = Address::random(&env);
+        let data = Vec::new(&env);
+        
+        // Submit max actions
+        for _ in 0..RATE_LIMIT_MAX {
+            client.submit_action(&agent, &1u32, &data);
+        }
+        
+        // Next should fail
+        let result = std::panic::catch_unwind(|| {
+            client.submit_action(&agent, &1u32, &data);
+        });
         assert!(result.is_err());
-        // minting badge for invalid quest fails
-        let result2 =
-            std::panic::catch_unwind(|| contract.mint_badge(env.clone(), user.clone(), 10));
-        assert!(result2.is_err());
     }
 }
