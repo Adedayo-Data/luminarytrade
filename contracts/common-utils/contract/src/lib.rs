@@ -3,7 +3,6 @@
 pub mod oracle_bridge;
 pub mod marketplace_types;
 pub mod marketplace;
-pub mod faucet;
 
 use soroban_sdk::{
     contract, contractimpl, panic_with_error, Symbol, Address, Env, Bytes, Vec, 
@@ -136,6 +135,3 @@ impl CommonUtilsContract {
 
 #[cfg(test)]
 mod test_marketplace;
-
-#[cfg(test)]
-mod faucet_tests;
